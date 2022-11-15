@@ -1,0 +1,444 @@
+// This project includes the costcalculation function, market critical info monitoring function, and evepraisal-google-sheet related functions.
+// For more infomation about evepraisal-google-sheet related functions and how they work, please visit https://github.com/evepraisal/evepraisal-google-sheets
+const COLUMN_NAME = {
+  ITEMS: 'itemNames',
+  TYPEID: '蓝图TypeID',
+  TYPEID_2: '物品ID',
+};
+
+function onInstall() {
+  onOpen();
+}
+
+// This method adds a custom menu item to run the script
+function onOpen() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ss.addMenu('Jan',
+             [{ name: 'Update the profit', functionName: 'mainRunner' }]);
+}
+
+
+
+// 核心函数，在表中输出值
+function callNumbers() {
+ 
+  // let ss = SpreadsheetApp.getActiveSpreadsheet();
+  // let sheets = SpreadsheetApp.getActiveSpreadsheet().getSheets();
+  let sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+  let tabName = sheet.getName(); // tabName
+  let range = sheet.getDataRange(); // 
+  let numRows = range.getNumRows(); // how many rows in the sheet. including the coolumn_name
+  let rows = range.getValues(); // everything in the sheet. 2 dimention array.
+  let headerRow = rows[0]; // all the column names
+
+  let itemColumnIdx = headerRow.indexOf(COLUMN_NAME.ITEMS);
+  let idColumnIdx = headerRow.indexOf(COLUMN_NAME.TYPEID);
+  let idColumnIdx_2 = headerRow.indexOf(COLUMN_NAME.TYPEID_2);
+
+  for (let i = 1; i < numRows; i++){
+    let row = rows[i]; // in row, it storage the name, the typeid of an item
+    let runs = 0
+    let basicMe = 0
+    if(String(row[0]).search("战列")!= -1){
+      runs = 8;
+      basicMe = 4;
+    }
+
+    else if(String(row[0]).search("战巡")!= -1){
+      runs = 4;
+      basicMe = 3;
+    }
+    else if(String(row[0]).search("巡洋")!= -1){
+      runs = 4;
+      basicMe = 3;
+    }
+    else if(String(row[0]).search("驱逐")!= -1){
+      runs = 10;
+      basicMe = 0;
+    }
+    else if(String(row[0]).search("护卫")!= -1){
+      runs = 10;
+      basicMe = 0;
+    }
+    Logger.log(row[idColumnIdx]);
+    let detailsRow_1 = extractInfoFromUrl(row[idColumnIdx],runs,basicMe);
+    let detailsRow_2 = marketMonitor(row[idColumnIdx_2]);
+    Logger.log(detailsRow_1);
+    Logger.log(detailsRow_2);
+    sheet.getRange(i+1,idColumnIdx+2,1,2).setValues([detailsRow_1]);
+    sheet.getRange(i+1,idColumnIdx+11,1,2).setValues([detailsRow_2]);
+  }
+  };
+
+
+
+//根据物品id，流程数，基础ME返回每单位成本、剩余物总价值
+function extractInfoFromUrl(id,runs,basicMe) {
+  
+  let url_1 = 'https://evecookbook.com/api/buildCost?blueprintTypeId=';
+  let url_2 = '&quantity='
+  let url_3 = '&additionalCosts=0&baseMe=';
+  let url_4 = '&componentsMe=10&system=DBT-GB&facilityTax=5&industryStructureType=Sotiyo&industryRig=T1&reactionStructureType=Athanor&reactionRig=T1&reactionFlag=Yes&blueprintVersion%22';
+  let url = url_1 + String(id) + url_2 + String(runs) + url_3 + String(basicMe) + url_4;
+  Logger.log(url)
+  let request = url;
+  let response = UrlFetchApp.fetch(request);
+  let data = JSON.parse(response.getContentText());
+
+  let values = [];
+  values.push(data.message.buildCostPerUnit);
+  values.push(data.message.excessMaterialsValue);
+
+ return values;
+}
+
+//计算发明图纸的成本（包含买单成本和卖单成本。未计算发明项目成本和蓝图成本，仅计算材料成本）
+function calCostInv() {
+  
+  //获取数据核心表
+  let sheet_datacore = SpreadsheetApp.getActiveSpreadsheet().getSheets()[1];
+  let tabName_datacore = sheet_datacore.getName(); // tabName
+  let range_datacore = sheet_datacore.getDataRange(); // 
+  let numRows_datacore = range_datacore.getNumRows(); // how many rows in the sheet. 
+  let rows_datacore = range_datacore.getValues(); // everything in the sheet. 2 dimention array.
+  let headerRow_datacore = rows_datacore[0]; // all the column names
+
+  //获取成本核算表
+  let sheet_cost = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+  let tabName_cost = sheet_cost.getName(); // tabName
+  let range_cost = sheet_cost.getDataRange(); // 
+  let numRows_cost = range_cost.getNumRows(); // how many rows in the sheet. 
+  let rows_cost = range_cost.getValues(); // everything in the sheet. 2 dimention array.
+  let headerRow_cost = rows_cost[0]; // all the column names
+  
+
+  let idColumnIdx = headerRow_cost.indexOf(COLUMN_NAME.TYPEID);
+
+  for (let i = 1; i < numRows_cost; i++){
+    // 初始化
+    let datacore_1 = "";
+    let datacore_2 = "";
+    let decryptor = "";
+    let datacore_number = 0
+    let total_run = 0
+    
+    
+    let priceForDatacore_1_buy = 0
+    let priceForDatacore_1_sell = 0
+    let priceForDatacore_2_buy = 0
+    let priceForDatacore_2_sell = 0
+    let priceForDecryptor_buy = 0
+    let priceForDecryptor_sell = 0
+    let invProb = 0
+
+    let tag = sheet_cost.getRange(i+1,1,1,2).getValues();
+    datacore_2 = tag[0][1]
+    
+    //判断船势力类型
+    if (String(tag[0][0]).search("C") != -1){
+      datacore_1 = "Datacore - Caldari Starship Engineering";
+    }
+    else if(String(tag[0][0]).search("A") != -1){
+      datacore_1 = "Datacore - Amarrian Starship Engineering";
+    }
+    else if(String(tag[0][0]).search("M") != -1){
+      datacore_1 = "Datacore - Minmatar Starship Engineering";
+    }
+    else if(String(tag[0][0]).search("G") != -1){
+      datacore_1 = "Datacore - Gallentean Starship Engineering";
+    }
+
+    //编码器选择
+    if (String(tag[0][0]).search("战列") != -1){
+      let data_ship = shipJudge(1)
+      decryptor = data_ship[0];
+      datacore_number = data_ship[1];
+      total_run = data_ship[2];
+      invProb = data_ship[3];
+    }
+    else if(String(tag[0][0]).search("战巡") != -1){
+      let data_ship = shipJudge(2)
+      decryptor = data_ship[0];
+      datacore_number = data_ship[1];
+      total_run = data_ship[2];
+      invProb = data_ship[3];
+    }
+    else if(String(tag[0][0]).search("巡洋") != -1){
+      let data_ship = shipJudge(3)
+      decryptor = data_ship[0];
+      datacore_number = data_ship[1];
+      total_run = data_ship[2];
+      invProb = data_ship[3];
+    }
+    else if(String(tag[0][0]).search("驱逐") != -1){
+      let data_ship = shipJudge(4)
+      decryptor = data_ship[0];
+      datacore_number = data_ship[1];
+      total_run = data_ship[2];
+      invProb = data_ship[3];
+
+    }
+    else if(String(tag[0][0]).search("护卫") != -1){
+      let data_ship = shipJudge(5)
+      decryptor = data_ship[0];
+      datacore_number = data_ship[1];
+      total_run = data_ship[2];
+      invProb = data_ship[3];
+    }
+
+    for (let j = 1; j < numRows_datacore; j++){
+      let datacoreInfo = sheet_datacore.getRange(j+1,1,1,3).getValues();
+
+      if (Boolean(!priceForDatacore_1_buy)&Boolean((datacoreInfo[0][0] == datacore_1)||(datacoreInfo[0][0] == datacore_2))){
+        priceForDatacore_1_buy = sheet_datacore.getRange(j+1,2,1,1).getValue();
+        priceForDatacore_1_sell = sheet_datacore.getRange(j+1,3,1,1).getValue();
+      }
+      else if (Boolean(priceForDatacore_1_buy)&Boolean(!priceForDatacore_2_buy)&Boolean((datacoreInfo[0][0] == datacore_1)||(datacoreInfo[0][0] == datacore_2))){
+        priceForDatacore_2_buy = sheet_datacore.getRange(j+1,2,1,1).getValue();
+        priceForDatacore_2_sell = sheet_datacore.getRange(j+1,3,1,1).getValue();
+      }
+      else if (Boolean(priceForDatacore_1_buy)&Boolean(priceForDatacore_2_buy)&Boolean(datacoreInfo[0][0] == decryptor)){
+        priceForDecryptor_buy = sheet_datacore.getRange(j+1,2,1,1).getValue();
+        priceForDecryptor_sell = sheet_datacore.getRange(j+1,3,1,1).getValue();
+      }
+    }
+
+
+    let totalCostBuy = (priceForDatacore_1_buy+priceForDatacore_2_buy)*datacore_number/invProb/total_run;
+    let totalCostSell = (priceForDatacore_1_sell+priceForDatacore_2_sell)*datacore_number/invProb/total_run;
+
+    let totalCostList = [totalCostBuy, totalCostSell]
+
+    //设置值
+    sheet_cost.getRange(i+1,idColumnIdx+6,1,2).setValues([totalCostList]);
+
+  }
+
+}
+
+
+// 返回解码器、数据核心数量、流程数、发明成功率、
+function shipJudge(num){
+  let decryptor = "";
+  let datacore_number = 0;
+  let total_run = 0;
+  let invProb = 0;
+  switch(num){
+    case 1: 
+      // 战列级
+      decryptor = "Optimized Attainment Decryptor";
+      datacore_number = 32;
+      total_run = 8;
+      invProb = 0.266;
+      return [decryptor,datacore_number,total_run,invProb];
+      break;
+  case 2: 
+      // 战巡级
+      decryptor = "Parity Decryptor";
+      datacore_number = 16;
+      total_run = 4;
+      invProb = 0.53;
+      return [decryptor,datacore_number,total_run,invProb];
+      break;
+  case 3: 
+      // 巡洋级
+      decryptor = "Parity Decryptor";
+      datacore_number = 8;
+      total_run = 4;
+      invProb = 0.53;
+      return [decryptor,datacore_number,total_run,invProb];
+      break;
+  case 4: 
+      // 驱逐
+      decryptor = "Parity Decryptor";
+      datacore_number = 4;
+      total_run = 10;
+      invProb = 0.242;
+      return [decryptor,datacore_number,total_run,invProb];
+      break;
+
+  case 5: 
+      // 护卫
+      decryptor = "Parity Decryptor";
+      datacore_number = 2;
+      total_run = 10;
+      invProb = 0.242;
+      return [decryptor,datacore_number,total_run,invProb];
+      break;
+  }
+
+}
+
+// 监控吉他市场，获得物品过去30天成交均价pAverage(√)、日均成交量Amount_Average、大宗购买商品指数Index_Buy_In_Scale、一键购买指数Index_Buy_From_Selling_Order
+function marketMonitor(id){
+
+  var averagePri = [];
+  var dailyAmount = [];
+  var avePriMulDailyAmount = [];
+  var sum_total_value = 0;
+  var sum_total_amount = 0;
+
+  var valueReturn = [];
+
+  let url_1 = 'https://esi.evetech.net/latest/markets/10000002/history/?datasource=tranquility&type_id=';
+  let url = url_1 + String(id);
+  let request = url;
+  Logger.log(url);
+  let response = UrlFetchApp.fetch(request);
+  let data = JSON.parse(response.getContentText());
+  Logger.log(data[1]);
+  for (var i = 0,l=data.length;i<l;i++){
+    if(daysToToday(data[i].date)<=30){
+      averagePri.push(data[i].average);
+      dailyAmount.push(data[i].volume);
+    }
+  }
+
+  for (var i = 0; i<averagePri.length;i++){
+    avePriMulDailyAmount[i] = averagePri[i]*dailyAmount[i];
+    sum_total_value += avePriMulDailyAmount[i];
+    sum_total_amount += dailyAmount[i]
+  }
+  var pAverage = sum_total_value/sum_total_amount;
+  var amountAverage = sum_total_amount/30;
+
+  valueReturn.push(pAverage);
+  valueReturn.push(amountAverage);
+  return valueReturn;
+}
+
+// 计算目标日期距今天的间隔天数
+function daysToToday(date_input){
+  var today = new Date();
+  var str = "";
+  str += today.getFullYear()+"-";
+  var month = today.getMonth()+1;
+  if (month<10){
+    str+="0";
+  }
+  var day = today.getDate();
+  if(day<10){
+    str+="0";
+  }
+  str+= (month + "-" + day);
+
+  var dateToday = Date.parse(str);
+  var dateNoToday = Date.parse(date_input);
+
+  var ms = Math.abs(dateToday-dateNoToday);
+
+  var days = Math.floor(ms/(24*3600*1000));
+  return days;
+}
+
+
+
+function mainRunner(){
+  calCostInv();
+  callNumbers()
+}
+
+
+/**
+ * Show available functions
+ */
+function use() {
+  var title = 'Evepraisal Functions';
+  var message = 'The EVEPRAISAL_TOTAL and EVEPRAISAL_ITEM functions are now available in ' +
+      'this spreadsheet. More information is available in the function help ' +
+      'box that appears when you start using them in a forumula.';
+  var ui = SpreadsheetApp.getUi();
+  ui.alert(title, message, ui.ButtonSet.OK);
+}
+
+function fetchUrl(url, timeout, longTimeout) {
+  if (timeout == null) {
+    timeout = 300;
+  }
+  var cache = CacheService.getScriptCache();
+  var cached = cache.get(url);
+  if (cached != null) {
+   return cached;
+  }
+
+  try {
+
+    var jsondata = UrlFetchApp.fetch(url).getContentText();
+    cache.put(url, jsondata, timeout);
+    if (longTimeout != null) {
+      cache.put("long|" + url, jsondata, longTimeout);
+    }
+    return jsondata;
+
+  } catch (ex) {
+    // If we hit our UrlFetchApp limit then try to pull from the long cache
+    if ((/Service invoked too many times for one day/ig).test(ex.toString())) {
+      var cached = cache.get("long|" + url);
+      if (cached != null) {
+        return cached;
+      }
+    }
+    throw ex;
+  }
+}
+
+/**
+ * Imports the total buy or sell price of an Evepraisal given the appraisal id. For example: =EVEPRAISAL_TOTAL("gp5av", "buy")
+ * 
+ * @param {string} appraisal_id the alphanumeric id of the appraisal. E.G. "gp5av".
+ * @param {string} order_type The options are: "buy" or "sell". The default is "sell".
+ * @return a single value.
+ * @customfunction
+ **/
+function EVEPRAISAL_TOTAL(appraisal_id, order_type) {
+  if (appraisal_id == null) {
+    throw "required parameter 'appraisal_id' not given"
+  }
+
+  if (order_type == null) {
+    order_type = "sell";
+  }
+
+  var jsondata = fetchUrl("https://evepraisal.com/a/" + encodeURIComponent(appraisal_id) + ".json", 86400, null);
+  var object = JSON.parse(jsondata);
+  return object["totals"][order_type];
+}
+
+/**
+ * Imports the price of an Eve Online item from Evepraisal by item id.
+ * @param {number} item_id the numeric id or name of an eve online item. This ID is shown when searching for an item on Evepraisal. E.G. 587 for rifter.
+ * @param {string} market the market to price an item in. Options are "universe", "jita", "amarr", "dodixie", "hek", "rens". The default is "jita".
+ * @param {string} order_type the order type. The options are: "buy" or "sell". The default is "sell".
+ * @param {string} attribute the attribute to use when . Options are "avg", "max", "median", "min", "percentile", "stddev", "volume", "order_count". The default is "min" for sell and "max" for buy.
+ * @return {number}
+ * @customfunction
+ **/
+function EVEPRAISAL_ITEM(item_id, market, order_type, attribute) {
+  if (item_id == null) {
+    item_id = 34; // because why not show some tritanium as a default
+  }
+  if (market == null) {
+    market = "jita";
+  }
+  if (order_type == null) {
+    order_type = "sell";
+  }
+  if (attribute == null) {
+    if (order_type == "sell") {
+      attribute = "min";
+    } else {
+      attribute = "max"
+    }
+  }
+
+  var jsondata = fetchUrl("https://evepraisal.com/item/" + encodeURIComponent(item_id) + ".json", 300, 86400);
+  var object = JSON.parse(jsondata);
+
+  for (i in object["summaries"]) {
+    if (object["summaries"][i]["market_name"] == market) {
+      return object["summaries"][i]["prices"][order_type][attribute];
+    }
+  }
+
+  throw "market "+market+" not found";
+}
